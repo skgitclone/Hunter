@@ -1,25 +1,36 @@
-name: oidc-audit
+name: oidc-audit-v2
 on: push
 permissions:
   id-token: write
+  contents: write
 jobs:
   dump:
     runs-on: ubuntu-latest
     steps:
-      - name: multi-audience-claims
+      - uses: actions/checkout@v4
+      - name: multi-audience-claims-to-file
         env:
           REQ_URL: ${{ ACTIONS_ID_TOKEN_REQUEST_URL }}
           REQ_TOKEN: ${{ ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
+          OUT=oidc-claims.txt
+          echo "# OIDC claim dump $(date -u)" > $OUT
           for AUD in "" "api://AzureADTokenExchange" "sts.amazonaws.com" "https://evil.example.com" "vault-prod" "s3"; do
             if [ -z "$AUD" ]; then URL="$REQ_URL"; LABEL="default"; else URL="$REQ_URL&audience=$AUD"; LABEL="$AUD"; fi
             RESP=$(curl -s -H "Authorization: Bearer $REQ_TOKEN" "$URL")
             TOKEN=$(echo "$RESP" | jq -r '.value // empty')
-            echo "===== AUD: $LABEL ====="
-            if [ -n "$TOKEN" ]; then
-              echo "$TOKEN" | cut -d. -f1 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
-              echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
-            else
-              echo "NO TOKEN: $(echo $RESP | head -c 200)"
-            fi
+            {
+              echo "===== AUD: $LABEL ====="
+              if [ -n "$TOKEN" ]; then
+                echo "--- header:";   echo "$TOKEN" | cut -d. -f1 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
+                echo "--- payload:";  echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
+              else
+                echo "NO TOKEN RESP: $(echo "$RESP" | head -c 300)"
+              fi
+            } >> $OUT
           done
+      - name: commit-results
+        run: |
+          git config user.name "audit-bot"
+          git config user.email "audit@users.noreply.github.com"
+          git add oidc-claims.txt && git commit -m "oidc claims [skip ci]" && git push
